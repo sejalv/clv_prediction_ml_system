@@ -1,4 +1,4 @@
-# ASSIGNMENT.md
+# README.md
 
 ## Problem
 Marketing wants an estimate of customer life-time value to determine user segments that are worth targeting in a campaign. As a proxy for CLV, the task is to predict `monetary_value_30`, i.e. the total money a passenger spends on trips within 30 days of registration, using only signals observable in their first 7 days of activity.
