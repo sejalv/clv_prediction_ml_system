@@ -1,0 +1,22 @@
+services:
+  app:
+    build:
+      context: .
+      target: app
+    environment:
+      # Avoid using host-mounted `.venv` (e.g. from local `make setup`) inside Linux containers.
+      POETRY_VIRTUALENVS_IN_PROJECT: "false"
+    ports:
+      - 8080:8080
+    volumes:
+      # Mount project root so ./database.sqlite and ./models/current match the host (train/run persist artifacts).
+      - .:/app
+
+  test:
+    build:
+      context: .
+      target: test
+    environment:
+      POETRY_VIRTUALENVS_IN_PROJECT: "false"
+    command: "pytest"
+
