@@ -60,7 +60,7 @@ Note: If you do not install Poetry locally, you can still use `make run`, `make 
 
 ---
 
-## Component 1: Model Training
+## 1. Model Training
 `app/training.py`
 
 Uses a Ridge regression model (with StandardScaler) compared against a mean baseline (DummyRegressor).
@@ -95,7 +95,7 @@ Run:
 
 ---
 
-## Component 2: Model Serving 
+## 2. Model Serving 
 `POST /api/predict`
 
 ### Request
@@ -144,7 +144,7 @@ Invalid requests return HTTP 422 with a structured error.
 
 ---
 
-## Component 3: Request Tracking
+## 3. Request Tracking
 
 ### Schema
 
