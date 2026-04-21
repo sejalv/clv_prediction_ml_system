@@ -46,6 +46,7 @@ pytest test/test_api.py
 - Python >= 3.10
 - Poetry >= 1.0
 - Docker + docker-compose
+- `database.sqlite` sample database must be present in the project root (bundled in submission zip) to run training.
 
 ### Commands
 
@@ -63,16 +64,16 @@ Note: If you do not install Poetry locally, you can still use `make run`, `make 
 ## 1. Model Training
 `app/training.py`
 
-Uses a Ridge regression model (with StandardScaler) compared against a mean baseline (DummyRegressor).
+Uses a RidgeCV regression model (with StandardScaler) to automatically tune regularization, compared against a mean baseline (DummyRegressor). Features' coefficients are saved to `metadata.json` for explainability.
 
 The training pipeline:
 1. Loads data from `database.sqlite` (table `passenger_activity_after_registration`)
 2. Contract filters: Uses only `recency_7`, `frequency_7`, `monetary_value_7` as features to avoid any lookahead leakage (optionally applying a golden slice for testing)
 3. Split: Performs a reproducible 80/20 train/validation split (fixed `random_state=7`)
-4. Trains baseline and Ridge models: evaluates both and raises a `UserWarning` if Ridge fails to beat the mean-baseline (data quality signal).
+4. Trains baseline and RidgeCV models: evaluates both and raises a `UserWarning` if RidgeCV fails to beat the mean-baseline (data quality signal).
 5. Evaluate both (overall + tail): Validates predictions are non-negative (clamps if necessary)
 6. Saves the model artifacts to `models/current/`:
-  - `model.joblib` (sklearn `Pipeline`: `StandardScaler` + `Ridge`)
+  - `model.joblib` (sklearn `Pipeline`: `StandardScaler` + `RidgeCV`)
   - `metadata.json`: DB row count and training timestamp are logged in here. It includes a `random_seed` and a sqlite fingerprint (`database.sqlite|bytes=…|mtime_utc=…`) to identify the snapshot cheaply. 
 
 Run:
@@ -81,16 +82,16 @@ Run:
 - NOTE: Re-running `make train` overwrites `models/current/` deterministically
 
 ### Baseline
-- **Mean-predictor (DummyRegressor)** trained on the same split as the primary model. Both MAE and RMSE are recorded in `metadata.json` under `baseline_metrics`. `make train` prints a side-by-side comparison table at the end of the run, making the Ridge choice evidence-based:
+- **Mean-predictor (DummyRegressor)** trained on the same split as the primary model. Both MAE and RMSE are recorded in `metadata.json` under `baseline_metrics`. `make train` prints a side-by-side comparison table at the end of the run, making the RidgeCV choice evidence-based. For example:
   ```
-  --- Model vs Baseline ---
-  Metric         Baseline (mean)        Ridge   Δ (↓ better)
+  --- Model vs Baseline (alpha=100.0) ---
+  Metric            Baseline (mean)      RidgeCV   Δ (↓ better)
   --------------------------------------------------------------
-  MAE                   XX.XXXX      XX.XXXX        -XX.X%
-  RMSE                  XX.XXXX      XX.XXXX        -XX.X%
-  MAE (top 25%)         XX.XXXX      XX.XXXX        -XX.X%
+  MAE                       34.0851      17.8985         +47.5%
+  RMSE                      66.3405      43.1215         +35.0%
+  MAE (top 25%)             68.2236      46.7394         +31.5%
 
-    (top-25% threshold: monetary_value_30 >= XX.XX)
+  (top-25% threshold: monetary_value_30 >= 49.62)
   ```
 
 ---
@@ -212,7 +213,7 @@ The app enables **SQLite WAL** on the SQLAlchemy engine to reduce write lock iss
 **Future enhancements:**
 - Hot-reload model safely (atomic swaps + lock) or use a registry.
 - Explicit dataset snapshot IDs and golden set in CI.
-- Model selection: Extending to gradient boosting (e.g. LightGBM) and gating automated deployment on validation metrics.
+- Model selection: Extending to gradient boosting (e.g. LightGBM, XGBoost) using SHAP values for global and local explainability, mapping closely to business stakeholders.
 
 **Production Evolution Path:**
 

@@ -1,4 +1,5 @@
-""" This file is used for defining the database connection"""
+"""This file is used for defining the database connection"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,7 +7,6 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Float, Integer, String, create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-
 
 engine = create_engine("sqlite:///./database.sqlite", connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.db import PredictRequestLog, SessionLocal, get_db, init_db
+from app.db import PredictRequestLog, get_db, init_db
 from app.training import FEATURE_COLUMNS, train_and_save
 
 logger = logging.getLogger(__name__)
@@ -31,12 +32,21 @@ def startup():
         print(f"model_version={model_version}")
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Return a sanitised JSON error for any unhandled exception (no stack traces to clients)."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal error occurred. Please try again later."},
+    )
+
+
 def _load_or_train_model() -> tuple[Any | None, str | None]:
     """
     Load the model artifact from MODEL_DIR.  If the artifact is missing, train
     a fresh model so the system stays self-contained for the coding challenge.
-    Returns (model, model_version) — never raises; sets both to None on failure
-    and raises RuntimeError so startup propagates the error clearly.
+    Raises RuntimeError on failure so startup propagates the error clearly.
     """
     model_dir = Path(os.environ.get("MODEL_DIR", "./models/current"))
     model_path = model_dir / "model.joblib"
@@ -72,8 +82,9 @@ class PredictRequest(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    id: int
-    monetary_30: float
+    passenger_id: int
+    predicted_monetary_value_30: float
+    model_version: str
 
 
 class CountResponse(BaseModel):
@@ -82,22 +93,23 @@ class CountResponse(BaseModel):
 
 
 @app.get("/health", response_model=str)
-async def get_health():
-    """
-    check for API health
-    """
+def get_health():
+    """check for API health"""
     return "healthy"
 
 
 @app.post("/api/predict", response_model=PredictResponse)
-async def predict_monetary(
+def predict_monetary(
     http_request: Request,
     request_payload: PredictRequest,
     sessions: Session = Depends(get_db),
 ):
     """
-    * predict monetary value for next 30 days
-    * track passenger information in dedicated table
+    Predict monetary value for next 30 days and log the request.
+
+    Note: declared as a plain `def` (not `async def`) so Uvicorn runs it in a
+    thread pool instead of blocking the event loop during CPU-bound sklearn
+    inference and the synchronous SQLAlchemy commit.
     """
     model = http_request.app.state.model
     model_version = http_request.app.state.model_version
@@ -133,16 +145,16 @@ async def predict_monetary(
     )
     sessions.commit()
 
-    return PredictResponse(id=request_payload.id, monetary_30=pred)
+    return PredictResponse(
+        passenger_id=request_payload.id,
+        predicted_monetary_value_30=pred,
+        model_version=model_version,
+    )
 
 
 @app.get("/api/requests/{passenger_id}", response_model=CountResponse)
-async def count_number_of_requests(
-    passenger_id: int, sessions: Session = Depends(get_db)
-):
-    """
-    * get the number of times this passenger id requested a prediction
-    """
+def count_number_of_requests(passenger_id: int, sessions: Session = Depends(get_db)):
+    """Get the number of times this passenger id has requested a prediction."""
     count = (
         sessions.query(PredictRequestLog)
         .filter(PredictRequestLog.passenger_id == passenger_id)

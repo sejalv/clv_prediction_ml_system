@@ -30,21 +30,24 @@ def test_golden_training_is_deterministic(sqlite_path: str, tmp_path: Path) -> N
     assert m1.row_count == m2.row_count <= 600
     assert m1.metrics == m2.metrics
     assert m1.baseline_metrics == m2.baseline_metrics
-    
+
     # NaN != NaN in Python, so we check if it's NaN first before equating
     import math
+
     if math.isnan(m1.tail_metrics["mae_top25pct"]):
         assert math.isnan(m2.tail_metrics["mae_top25pct"])
     else:
         assert m1.tail_metrics == m2.tail_metrics
-        
+
     if math.isnan(m1.baseline_tail_metrics["mae_top25pct"]):
         assert math.isnan(m2.baseline_tail_metrics["mae_top25pct"])
     else:
         assert m1.baseline_tail_metrics == m2.baseline_tail_metrics
 
     assert m1.training_subset == "golden_first_600_by_id"
-    assert m1.model_type == "Ridge"
+    assert m1.model_type == "RidgeCV"
+    assert m1.best_alpha == m2.best_alpha
+    assert m1.coefficients == m2.coefficients
     assert "|mtime_utc=" in m1.sqlite_fingerprint
     assert m1.sqlite_fingerprint == m2.sqlite_fingerprint
 
@@ -60,13 +63,16 @@ def test_metadata_json_includes_fingerprint_and_subset(sqlite_path: str, tmp_pat
     )
     raw = json.loads((out / "metadata.json").read_text(encoding="utf-8"))
     assert raw["training_subset"] == "golden_first_400_by_id"
-    assert raw["model_type"] == "Ridge"
+    assert raw["model_type"] == "RidgeCV"
+    assert "best_alpha" in raw and isinstance(raw["best_alpha"], float)
+    assert "coefficients" in raw and len(raw["coefficients"]) == 3
     assert "sqlite_fingerprint" in raw and "mtime_utc" in raw["sqlite_fingerprint"]
     assert "baseline_metrics" in raw
     assert "mae" in raw["baseline_metrics"] and "rmse" in raw["baseline_metrics"]
     assert "tail_metrics" in raw
     assert "baseline_tail_metrics" in raw
     assert "mae_top25pct" in raw["tail_metrics"]
+
 
 def test_model_beats_mean_baseline(sqlite_path: str, tmp_path: Path) -> None:
     """Quality gate: Ridge must outperform a mean-predictor on the held-out set.
@@ -81,7 +87,7 @@ def test_model_beats_mean_baseline(sqlite_path: str, tmp_path: Path) -> None:
         golden_max_rows=600,
     )
     assert meta.metrics["mae"] < meta.baseline_metrics["mae"], (
-        f"Ridge MAE ({meta.metrics['mae']:.4f}) must be lower than "
+        f"RidgeCV MAE ({meta.metrics['mae']:.4f}) must be lower than "
         f"mean-baseline MAE ({meta.baseline_metrics['mae']:.4f})"
     )
 
@@ -102,6 +108,6 @@ def test_model_mae_within_absolute_threshold(sqlite_path: str, tmp_path: Path) -
         golden_max_rows=600,
     )
     assert meta.metrics["mae"] < MAE_THRESHOLD, (
-        f"Ridge MAE ({meta.metrics['mae']:.4f}) exceeded threshold of {MAE_THRESHOLD}. "
+        f"RidgeCV MAE ({meta.metrics['mae']:.4f}) exceeded threshold of {MAE_THRESHOLD}. "
         "Check for data drift or model regression."
     )

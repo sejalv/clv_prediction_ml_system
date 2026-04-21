@@ -13,24 +13,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from joblib import dump
 from sklearn.dummy import DummyRegressor
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import RidgeCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-import numpy as np
-
-
 FEATURE_COLUMNS = ["recency_7", "frequency_7", "monetary_value_7"]
 TARGET_COLUMN = "monetary_value_30"
 TABLE_NAME = "passenger_activity_after_registration"
 
-# Saved artifact is a sklearn Pipeline(StandardScaler, Ridge); this label is for metadata only.
-MODEL_TYPE = "Ridge"
+# Saved artifact is a sklearn Pipeline(StandardScaler, RidgeCV); this label is for metadata only.
+MODEL_TYPE = "RidgeCV"
+
+# Regularization strengths searched by cross-validation on the training fold.
+RIDGE_ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0]
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class TrainingMetadata:
     train_size: int
     val_size: int
     random_seed: int
+    best_alpha: float
+    coefficients: dict[str, float]
     metrics: dict[str, float]
     baseline_metrics: dict[str, float]
     tail_metrics: dict[str, float]
@@ -70,7 +73,7 @@ def apply_training_data_contract(
     golden_max_rows: Optional[int],
 ) -> tuple[pd.DataFrame, str]:
     """
-    Drop invalid rows (see ASSINGMENT.md data contract), then optionally keep the first N rows
+    Drop invalid rows (see README.md data contract), then optionally keep the first N rows
     by `id` after sorting — deterministic ordering for golden / smoke training.
     """
     df = df.dropna(subset=FEATURE_COLUMNS + [TARGET_COLUMN]).copy()
@@ -118,9 +121,7 @@ def train_and_save(
     X = df[FEATURE_COLUMNS]
     y = df[TARGET_COLUMN]
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=random_seed
-    )
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=random_seed)
 
     # --- Baseline: mean-predictor (DummyRegressor) ---
     baseline = DummyRegressor(strategy="mean")
@@ -129,14 +130,21 @@ def train_and_save(
     baseline_mae = float(mean_absolute_error(y_val, baseline_preds))
     baseline_rmse = float(math.sqrt(mean_squared_error(y_val, baseline_preds)))
 
-    # --- Primary model: Ridge with standard scaling ---
+    # --- Primary model: RidgeCV with standard scaling ---
+    # RidgeCV searches across RIDGE_ALPHAS using leave-one-out CV on the training fold,
+    # selecting the regularization strength that minimises in-fold MSE automatically.
     pipeline = Pipeline(
         steps=[
             ("scaler", StandardScaler()),
-            ("model", Ridge(random_state=random_seed)),
+            ("model", RidgeCV(alphas=RIDGE_ALPHAS)),
         ]
     )
     pipeline.fit(X_train, y_train)
+
+    ridge = pipeline.named_steps["model"]
+    best_alpha = float(ridge.alpha_)
+    # Surface coefficients for marketing explainability (pre-scaling, so units are comparable).
+    coefficients = {feat: float(coef) for feat, coef in zip(FEATURE_COLUMNS, ridge.coef_)}
 
     preds = pipeline.predict(X_val).clip(min=0.0)
 
@@ -152,7 +160,9 @@ def train_and_save(
     tail_mask = y_val_arr >= q75
     if tail_mask.sum() > 0:
         tail_mae = float(mean_absolute_error(y_val_arr[tail_mask], preds[tail_mask]))
-        baseline_tail_mae = float(mean_absolute_error(y_val_arr[tail_mask], baseline_preds[tail_mask]))
+        baseline_tail_mae = float(
+            mean_absolute_error(y_val_arr[tail_mask], baseline_preds[tail_mask])
+        )
     else:
         tail_mae = float("nan")
         baseline_tail_mae = float("nan")
@@ -160,8 +170,9 @@ def train_and_save(
     # Sanity-check: trained model should beat the mean baseline.
     if mae >= baseline_mae:
         import warnings
+
         warnings.warn(
-            f"Ridge MAE ({mae:.4f}) did not improve over mean-baseline MAE ({baseline_mae:.4f}). "
+            f"RidgeCV MAE ({mae:.4f}) did not improve over mean-baseline MAE ({baseline_mae:.4f}). "
             "Check data quality or feature set.",
             UserWarning,
             stacklevel=2,
@@ -186,6 +197,8 @@ def train_and_save(
         train_size=int(X_train.shape[0]),
         val_size=int(X_val.shape[0]),
         random_seed=int(random_seed),
+        best_alpha=best_alpha,
+        coefficients=coefficients,
         metrics={"mae": mae, "rmse": rmse},
         baseline_metrics={"mae": baseline_mae, "rmse": baseline_rmse},
         tail_metrics={"mae_top25pct": tail_mae, "q75_threshold": q75},
@@ -231,14 +244,18 @@ def main() -> None:
         if bt["mae_top25pct"] and not math.isnan(bt["mae_top25pct"])
         else 0.0
     )
-    print("\n--- Model vs Baseline ---")
-    print(f"{'Metric':<14} {'Baseline (mean)':>18} {'Ridge':>12} {'Δ (↓ better)':>14}")
+    print(f"\n--- Model vs Baseline (alpha={metadata.best_alpha}) ---")
+    print(f"{'Metric':<14} {'Baseline (mean)':>18} {'RidgeCV':>12} {'Δ (↓ better)':>14}")
     print("-" * 62)
     print(f"{'MAE':<14} {b['mae']:>18.4f} {m['mae']:>12.4f} {mae_lift:>+13.1f}%")
     print(f"{'RMSE':<14} {b['rmse']:>18.4f} {m['rmse']:>12.4f} {rmse_lift:>+13.1f}%")
-    print(f"{'MAE (top 25%)':<14} {bt['mae_top25pct']:>18.4f} {mt['mae_top25pct']:>12.4f} {tail_lift:>+13.1f}%")
+    tail_label = "MAE (top 25%)"
+    print(
+        f"{tail_label:<14} {bt['mae_top25pct']:>18.4f}"
+        f" {mt['mae_top25pct']:>12.4f} {tail_lift:>+13.1f}%"
+    )
     print(f"\n  (top-25% threshold: monetary_value_30 >= {mt['q75_threshold']:.2f})")
-
+    print(f"\n  Coefficients: {metadata.coefficients}")
 
 
 if __name__ == "__main__":
