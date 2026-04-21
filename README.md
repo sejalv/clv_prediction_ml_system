@@ -53,7 +53,7 @@ pytest test/test_api.py
 ```bash
 make setup   # install dependencies (requires Poetry)
 make train   # train model and save artifact to models/current/
-make run     # start app in docker; FastAPI service on http://0.0.0.0:8080 (docs at http://0.0.0.0:8080/docs)
+make run     # start app in docker; FastAPI service on http://0.0.0.0:8080 (/health, /docs)
 make test    # run API contract tests inside Docker
 ```
 
