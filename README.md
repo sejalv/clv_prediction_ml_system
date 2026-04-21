@@ -73,7 +73,7 @@ The training pipeline:
 5. Evaluate both (overall + tail): Validates predictions are non-negative (clamps if necessary)
 6. Saves the model artifacts to `models/current/`:
   - `model.joblib` (sklearn `Pipeline`: `StandardScaler` + `Ridge`)
-  - `metadata.json`: DB row count and training timestamp are logged in here. It includes a **sqlite fingerprint** (`database.sqlite|bytes=…|mtime_utc=…`) plus `random_seed`. It is not a cryptographic hash of file contents; it identifies the snapshot cheaply. 
+  - `metadata.json`: DB row count and training timestamp are logged in here. It includes a `random_seed` and a sqlite fingerprint (`database.sqlite|bytes=…|mtime_utc=…`) to identify the snapshot cheaply. 
 
 Run:
 - `make train`
